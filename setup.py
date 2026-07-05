@@ -3,8 +3,8 @@ import pybind11
 
 ext_modules = [
     Extension(
-        'taxi_simulator',
-        ['src/taxi_simulator.cpp'],
+        'megacity_taxi_env',
+        ['MegacityTaxiEnv.cpp'],
         include_dirs=[pybind11.get_include()],
         language='c++',
         extra_compile_args=['-std=c++17', '-O3']
@@ -12,7 +12,7 @@ ext_modules = [
 ]
 
 setup(
-    name='taxi_simulator',
+    name='megacity_taxi_env',
     version='0.1',
     ext_modules=ext_modules,
     zip_safe=False,
