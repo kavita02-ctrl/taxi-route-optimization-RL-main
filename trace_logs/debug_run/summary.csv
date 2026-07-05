@@ -1,0 +1,6 @@
+episode,outcome,steps,total_reward,stuck_reason,log_path
+1,stuck_repeat,129,-130.0,repeat>5,trace_logs/debug_run/trace_ep_001.csv
+2,stuck_repeat,64,-65.0,repeat>5,trace_logs/debug_run/trace_ep_002.csv
+3,stuck_repeat,145,-146.0,repeat>5,trace_logs/debug_run/trace_ep_003.csv
+4,stuck_repeat,112,-113.0,repeat>5,trace_logs/debug_run/trace_ep_004.csv
+5,stuck_repeat,10,-11.0,repeat>5,trace_logs/debug_run/trace_ep_005.csv

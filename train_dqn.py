@@ -22,6 +22,10 @@ LR = 1e-4
 MEMORY_SIZE = 1000000
 EPISODES = 2000
 
+# Reward shaping configuration (increase scent to encourage approach)
+SHAPING_SCALE = 0.25  # multiplier for distance reduction reward (was 0.1)
+PROXIMITY_BONUS = 0.5  # extra small bonus when within manhattan distance <= 2
+
 # Set device to GPU if available, else CPU
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -45,15 +49,26 @@ class ReplayMemory(object):
 class DQN(nn.Module):
     def __init__(self, n_observations, n_actions):
         super(DQN, self).__init__()
-        # A simple Feed Forward Neural Network
-        self.layer1 = nn.Linear(n_observations, 128)
-        self.layer2 = nn.Linear(128, 128)
-        self.layer3 = nn.Linear(128, n_actions)
+        # Dual-branch DQN architecture: spatial CNN branch + global coordinate branch
+        self.conv1 = nn.Conv2d(in_channels=1, out_channels=16, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(in_channels=16, out_channels=32, kernel_size=3, padding=0)
+        self.fc_global = nn.Linear(7, 64)
+        self.fc_combined = nn.Linear(32 * 3 * 3 + 64, 128)
+        self.head = nn.Linear(128, n_actions)
 
     def forward(self, x):
-        x = F.relu(self.layer1(x))
-        x = F.relu(self.layer2(x))
-        return self.layer3(x)
+        global_x = x[:, :7]
+        spatial_x = x[:, 7:].view(-1, 1, 5, 5)
+
+        s = F.relu(self.conv1(spatial_x))
+        s = F.relu(self.conv2(s))
+        s = s.view(s.size(0), -1)
+
+        g = F.relu(self.fc_global(global_x))
+
+        combined = torch.cat((s, g), dim=1)
+        combined = F.relu(self.fc_combined(combined))
+        return self.head(combined)
 
 class MegacityWrapper:
     """Wraps the C++ environment to provide normalized Tensors and Local Vision."""
@@ -110,7 +125,11 @@ class MegacityWrapper:
         new_dist = abs(c_state.taxi_x - new_tgt_x) + abs(c_state.taxi_y - new_tgt_y)
 
         # shaping: positive when we move closer, negative when we move away
-        shaping = 0.1 * (prev_dist - new_dist)
+        shaping = SHAPING_SCALE * (prev_dist - new_dist)
+
+        # small proximity bonus to encourage entering narrow approach corridors
+        if new_dist <= 2:
+            shaping += PROXIMITY_BONUS
 
         shaped_reward = reward + shaping
 
@@ -186,7 +205,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Train DQN on Megacity Taxi")
     parser.add_argument("--episodes", type=int, default=500, help="Number of training episodes to run")
-    parser.add_argument("--save", type=str, default="megacity_dqn_taxi_shaped.pth", help="Path to save trained model")
+    parser.add_argument("--save", type=str, default="megacity_dqn_taxi_cnn.pth", help="Path to save trained model")
     args = parser.parse_args()
 
     env = MegacityWrapper()

@@ -17,14 +17,25 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class DQN(nn.Module):
     def __init__(self, n_observations, n_actions):
         super(DQN, self).__init__()
-        self.layer1 = nn.Linear(n_observations, 128)
-        self.layer2 = nn.Linear(128, 128)
-        self.layer3 = nn.Linear(128, n_actions)
+        self.conv1 = nn.Conv2d(in_channels=1, out_channels=16, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(in_channels=16, out_channels=32, kernel_size=3, padding=0)
+        self.fc_global = nn.Linear(7, 64)
+        self.fc_combined = nn.Linear(32 * 3 * 3 + 64, 128)
+        self.head = nn.Linear(128, n_actions)
 
     def forward(self, x):
-        x = F.relu(self.layer1(x))
-        x = F.relu(self.layer2(x))
-        return self.layer3(x)
+        global_x = x[:, :7]
+        spatial_x = x[:, 7:].view(-1, 1, 5, 5)
+
+        s = F.relu(self.conv1(spatial_x))
+        s = F.relu(self.conv2(s))
+        s = s.view(s.size(0), -1)
+
+        g = F.relu(self.fc_global(global_x))
+
+        combined = torch.cat((s, g), dim=1)
+        combined = F.relu(self.fc_combined(combined))
+        return self.head(combined)
 
 class MegacityWrapper:
     def __init__(self, grid_size=100, roadblocks=50):
@@ -139,7 +150,8 @@ if __name__ == "__main__":
 
         env = MegacityWrapper(grid_size=GRID_SIZE, roadblocks=50)
         policy_net = DQN(n_observations, n_actions).to(device)
-        model_path = "megacity_dqn_taxi.pth"
+        # Prefer the CNN-trained model if available
+        model_path = "megacity_dqn_taxi_cnn.pth"
         if load_model(policy_net, model_path):
             print(f"Loaded model weights from {model_path}")
         else:
