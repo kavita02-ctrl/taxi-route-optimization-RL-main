@@ -9,24 +9,28 @@ sys.path.insert(0, os.getcwd())
 from visualize_dqn import DQN, MegacityWrapper, n_actions, n_observations, device
 import torch
 
-MODEL_PATH = "megacity_dqn_taxi.pth"
+MODEL_PATH = "megacity_dqn_taxi_shaped.pth"
 LOG_PATH = "trace_policy.log"
 
 
 def load_model(model, path):
     if os.path.exists(path):
-        model.load_state_dict(torch.load(path, map_location=device))
-        model.eval()
-        return True
+        try:
+            model.load_state_dict(torch.load(path, map_location=device))
+            model.eval()
+            return True
+        except Exception as e:
+            print(f"Failed to load model: {e}; continuing with untrained model.")
+            return False
     return False
 
 
 def trace_one_episode(max_steps=2000, stuck_no_move_threshold=10, repeat_threshold=5):
     env = MegacityWrapper(grid_size=100, roadblocks=50)
     policy_net = DQN(n_observations, n_actions).to(device)
-    if not load_model(policy_net, MODEL_PATH):
-        print("Model not found; aborting trace.")
-        return
+    loaded = load_model(policy_net, MODEL_PATH)
+    if not loaded:
+        print("Model not loaded; continuing with untrained policy for trace.")
 
     state = env.reset()
     total_reward = 0

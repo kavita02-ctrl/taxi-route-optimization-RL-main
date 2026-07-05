@@ -19,7 +19,7 @@ EPS_END = 0.05
 EPS_DECAY = 500000
 TARGET_UPDATE = 10
 LR = 1e-4
-MEMORY_SIZE = 50000
+MEMORY_SIZE = 1000000
 EPISODES = 2000
 
 # Set device to GPU if available, else CPU
@@ -67,16 +67,22 @@ class MegacityWrapper:
         px, py = c_state.passenger_x / self.grid_size, c_state.passenger_y / self.grid_size
         dx, dy = c_state.dest_x / self.grid_size, c_state.dest_y / self.grid_size
         in_taxi = 1.0 if c_state.passenger_in_taxi else 0.0
-        
-        # Local Vision: Check for immediate roadblocks
+
+        # Local Vision: 5x5 grid centered on taxi (radius=2)
         rb_set = set(c_state.roadblocks)
-        obs_s = 1.0 if (c_state.taxi_x, c_state.taxi_y - 1) in rb_set else 0.0
-        obs_n = 1.0 if (c_state.taxi_x, c_state.taxi_y + 1) in rb_set else 0.0
-        obs_e = 1.0 if (c_state.taxi_x + 1, c_state.taxi_y) in rb_set else 0.0
-        obs_w = 1.0 if (c_state.taxi_x - 1, c_state.taxi_y) in rb_set else 0.0
-        
-        # Total observation space: 11 dimensions
-        state_array = np.array([tx, ty, px, py, dx, dy, in_taxi, obs_s, obs_n, obs_e, obs_w], dtype=np.float32)
+        radius = 2
+        local_grid = []
+        for dy_off in range(-radius, radius + 1):
+            for dx_off in range(-radius, radius + 1):
+                nx = c_state.taxi_x + dx_off
+                ny = c_state.taxi_y + dy_off
+                if 0 <= nx < self.grid_size and 0 <= ny < self.grid_size and (nx, ny) in rb_set:
+                    local_grid.append(1.0)
+                else:
+                    local_grid.append(0.0)
+
+        # Total observation space: 7 (coords+in_taxi) + 25 = 32
+        state_array = np.array([tx, ty, px, py, dx, dy, in_taxi] + local_grid, dtype=np.float32)
         return torch.tensor(state_array, device=device).unsqueeze(0)
 
     def reset(self):
@@ -84,12 +90,35 @@ class MegacityWrapper:
         return self._extract_state(c_state)
 
     def step(self, action):
+        # Compute a small shaping reward based on reduction in Manhattan distance
+        prev = self.env.get_state()
+        if not prev.passenger_in_taxi:
+            tgt_x, tgt_y = prev.passenger_x, prev.passenger_y
+        else:
+            tgt_x, tgt_y = prev.dest_x, prev.dest_y
+
+        prev_dist = abs(prev.taxi_x - tgt_x) + abs(prev.taxi_y - tgt_y)
+
         c_state, reward, done = self.env.step(action)
-        return self._extract_state(c_state), reward, done
+
+        # New distance after the action
+        if not c_state.passenger_in_taxi:
+            new_tgt_x, new_tgt_y = c_state.passenger_x, c_state.passenger_y
+        else:
+            new_tgt_x, new_tgt_y = c_state.dest_x, c_state.dest_y
+
+        new_dist = abs(c_state.taxi_x - new_tgt_x) + abs(c_state.taxi_y - new_tgt_y)
+
+        # shaping: positive when we move closer, negative when we move away
+        shaping = 0.1 * (prev_dist - new_dist)
+
+        shaped_reward = reward + shaping
+
+        return self._extract_state(c_state), shaped_reward, done
 
 env = None
 n_actions = 6
-n_observations = 11 # 7 standard + 4 obstacle sensors
+n_observations = 32 # 7 coords+in_taxi + 5x5 local grid = 32
 
 # Policy net is what we train, Target net stabilizes learning
 policy_net = None
@@ -153,7 +182,12 @@ def optimize_model():
     optimizer.step()
 
 if __name__ == "__main__":
-    global env, policy_net, target_net, optimizer, memory, steps_done
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Train DQN on Megacity Taxi")
+    parser.add_argument("--episodes", type=int, default=500, help="Number of training episodes to run")
+    parser.add_argument("--save", type=str, default="megacity_dqn_taxi_shaped.pth", help="Path to save trained model")
+    args = parser.parse_args()
 
     env = MegacityWrapper()
     policy_net = DQN(n_observations, n_actions).to(device)
@@ -164,18 +198,20 @@ if __name__ == "__main__":
     optimizer = optim.AdamW(policy_net.parameters(), lr=LR, amsgrad=True)
     memory = ReplayMemory(MEMORY_SIZE)
 
-    print("Starting DQN Training on Megacity Environment...")
+    episodes = args.episodes
+
+    print(f"Starting DQN Training on Megacity Environment for {episodes} episodes...")
     start_time = time.time()
 
-    for i_episode in range(EPISODES):
+    for i_episode in range(episodes):
         state = env.reset()
         total_reward = 0
-    
+
         for t in range(500): # Max steps per episode to prevent infinite loops
             action = select_action(state)
             next_state, reward, done = env.step(action.item())
             total_reward += reward
-        
+
             reward = torch.tensor([reward], device=device)
 
             if done:
@@ -192,15 +228,16 @@ if __name__ == "__main__":
 
             if done:
                 break
-            
+
         # Update the target network periodically
         if i_episode % TARGET_UPDATE == 0:
             target_net.load_state_dict(policy_net.state_dict())
-        
-        if (i_episode + 1) % 100 == 0:
-            print(f"Episode {i_episode+1}/{EPISODES} | Last Reward: {total_reward} | Epsilon: {max(EPS_END, EPS_START * math.exp(-1. * steps_done / EPS_DECAY)):.3f}")
+
+        if (i_episode + 1) % 50 == 0 or i_episode == episodes - 1:
+            eps = max(EPS_END, EPS_START * math.exp(-1. * steps_done / EPS_DECAY))
+            print(f"Episode {i_episode+1}/{episodes} | Last Reward: {total_reward} | Epsilon: {eps:.3f}")
 
     print(f"Training completed in {time.time() - start_time:.2f} seconds.")
-    # Save the trained model weights
-    torch.save(policy_net.state_dict(), "megacity_dqn_taxi.pth")
-    print("Model saved to megacity_dqn_taxi.pth")
+    # Save the trained model weights to the requested path
+    torch.save(policy_net.state_dict(), args.save)
+    print(f"Model saved to {args.save}")

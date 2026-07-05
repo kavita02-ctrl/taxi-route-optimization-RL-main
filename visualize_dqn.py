@@ -9,7 +9,8 @@ import megacity_taxi_env
 
 # Hyperparameters
 n_actions = 6
-n_observations = 11
+# Observation size: 7 (coords + in_taxi) + 5x5 local grid = 32
+n_observations = 32
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -37,12 +38,18 @@ class MegacityWrapper:
         in_taxi = 1.0 if c_state.passenger_in_taxi else 0.0
 
         rb_set = set(c_state.roadblocks)
-        obs_s = 1.0 if (c_state.taxi_x, c_state.taxi_y - 1) in rb_set else 0.0
-        obs_n = 1.0 if (c_state.taxi_x, c_state.taxi_y + 1) in rb_set else 0.0
-        obs_e = 1.0 if (c_state.taxi_x + 1, c_state.taxi_y) in rb_set else 0.0
-        obs_w = 1.0 if (c_state.taxi_x - 1, c_state.taxi_y) in rb_set else 0.0
+        radius = 2
+        local_grid = []
+        for dy_off in range(-radius, radius + 1):
+            for dx_off in range(-radius, radius + 1):
+                nx = c_state.taxi_x + dx_off
+                ny = c_state.taxi_y + dy_off
+                if 0 <= nx < self.grid_size and 0 <= ny < self.grid_size and (nx, ny) in rb_set:
+                    local_grid.append(1.0)
+                else:
+                    local_grid.append(0.0)
 
-        state_array = np.array([tx, ty, px, py, dx, dy, in_taxi, obs_s, obs_n, obs_e, obs_w], dtype=np.float32)
+        state_array = np.array([tx, ty, px, py, dx, dy, in_taxi] + local_grid, dtype=np.float32)
         return torch.tensor(state_array, device=device).unsqueeze(0)
 
     def reset(self):
@@ -116,9 +123,13 @@ draw_grid = draw_megacity
 
 def load_model(model, path):
     if os.path.exists(path):
-        model.load_state_dict(torch.load(path, map_location=device))
-        model.eval()
-        return True
+        try:
+            model.load_state_dict(torch.load(path, map_location=device))
+            model.eval()
+            return True
+        except Exception as e:
+            print(f"Failed to load model: {e}; continuing with untrained model.")
+            return False
     return False
 
 
