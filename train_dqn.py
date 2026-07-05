@@ -20,11 +20,11 @@ EPS_DECAY = 500000
 TARGET_UPDATE = 10
 LR = 1e-4
 MEMORY_SIZE = 1000000
-EPISODES = 2000
+EPISODES = 3000
 
-# Reward shaping configuration (increase scent to encourage approach)
-SHAPING_SCALE = 0.25  # multiplier for distance reduction reward (was 0.1)
-PROXIMITY_BONUS = 0.5  # extra small bonus when within manhattan distance <= 2
+# Reward shaping configuration (tamed to prevent reward farming)
+SHAPING_SCALE = 0.05  # smaller distance-based incentive
+PROXIMITY_BONUS = 0.2  # mild bonus when within manhattan distance <= 2
 
 # Set device to GPU if available, else CPU
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
